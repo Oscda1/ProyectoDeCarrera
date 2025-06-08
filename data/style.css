@@ -1,0 +1,101 @@
+
+        body {
+            font-family: Arial, sans-serif;
+        }
+        .hidden {
+            display: none;
+        }
+        .phase-indicator {
+            display: flex;
+            justify-content: center;
+            margin-bottom: 20px;
+        }
+        .phase-indicator span {
+            width: 30px;
+            height: 30px;
+            border: 2px solid #000;
+            border-radius: 50%;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            margin: 0 5px;
+            cursor: pointer;
+        }
+        .active {
+            background-color: #000;
+            color: #fff;
+        }
+        .container {
+            max-width: 400px;
+            margin: auto;
+            text-align: center;
+        }
+        button {
+            margin: 10px;
+        }
+        .wifi-option {
+            padding: 10px;
+            margin: 5px 0;
+            border: 1px solid #ccc;
+            border-radius: 5px;
+            cursor: pointer;
+            text-align: center;
+            background-color: #f9f9f9;
+            transition: background-color 0.3s;
+        }
+
+        .wifi-option:hover {
+            background-color: #e0e0e0;
+        }
+
+        .wifi-option.selected {
+            background-color: #d0d0ff;
+            border-color: #8080ff;
+        }
+
+        .hidden {
+            display: none;
+        }
+        
+        #summary-container {
+            border: 1px solid #ccc;
+            border-radius: 5px;
+            padding: 15px;
+            background-color: #f9f9f9;
+            box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
+            max-width: 600px;
+            margin: 0 auto;
+        }
+
+        #summary-container p {
+            margin: 0;
+            font-size: 16px;
+            line-height: 1.5;
+            color: #333;
+        }
+
+        .fade-out {
+            animation: fadeOut 0.5s forwards;
+        }
+
+        .fade-in {
+            animation: fadeIn 0.5s forwards;
+        }
+
+        @keyframes fadeOut {
+            from {
+                opacity: 1;
+            }
+            to {
+                opacity: 0;
+            }
+        }
+
+        @keyframes fadeIn {
+            from {
+                opacity: 0;
+            }
+            to {
+                opacity: 1;
+            }
+        }

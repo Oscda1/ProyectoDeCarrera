@@ -1,14 +1,12 @@
-/* ESPNOW Example
+#ifndef RAV_H
+#define RAV_H
 
-   This example code is in the Public Domain (or CC0 licensed, at your option.)
-
-   Unless required by applicable law or agreed to in writing, this
-   software is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR
-   CONDITIONS OF ANY KIND, either express or implied.
-*/
-
-#ifndef ESPNOW_EXAMPLE_H
-#define ESPNOW_EXAMPLE_H
+#include <stdio.h>
+#include <string.h>
+#include "esp_wifi.h"
+#include "esp_log.h"
+#include "esp_now.h"
+#include "nvs_flash.h"
 
 /* ESPNOW can work in both station and softap mode. It is configured in menuconfig. */
 #if CONFIG_ESPNOW_WIFI_MODE_STATION
@@ -56,6 +54,51 @@ enum {
     EXAMPLE_ESPNOW_DATA_MAX,
 };
 
+enum{
+    DISP_COLABORADOR=0,
+    DISP_USUARIO,
+    DISP_BALIZA
+};
+
+typedef struct{
+    char ssid[32];                     //SSID of WiFi.
+    char password[64];                 //Password of WiFi.
+}WIFI_DETAILS;
+
+typedef struct{
+    uint8_t mac[ESP_NOW_ETH_ALEN];     //MAC address of ESPNOW device.
+    bool activo;                    //Indicate that if the ESPNOW device is active or not.
+}TYPE_ESP_NOW_DEVICE;
+
+typedef struct{
+    char command;                     //Command to be executed.
+    char red[32];                     //Network name.
+    char info[64];                    //Additional information.
+}TYPE_PAYLOAD;
+
+typedef uint16_t PIN_TYPE;
+
+typedef uint8_t TYPE_DEVICES_NUM;
+typedef uint8_t TYPE_DEVICE;
+
+typedef struct{
+    bool alr_init;                      //Indicate that if it is the first time configuration or not.
+    WIFI_DETAILS wifi_details;          //WiFi details.
+    TYPE_DEVICE device_type;            //Type of device (e.g., collaborator, user, beacon).
+    PIN_TYPE pin;                       //Pin number for the device.
+    char nomRed[32];                    //Network name.
+}TYPE_FLASH_INFO;
+
+typedef struct{
+    char red[32];                     //Network name.
+    char alias[64];                   //Alias for the device on the network.
+}TYPE_NETWORK_INFO;
+
+typedef struct{
+    TYPE_NETWORK_INFO network_info;       //Network information.
+    TYPE_NETWORK_INFO* next_node;         //Pointer to the next node in the linked list.
+}TYPE_DYNAMIC_LIST;
+
 /* User defined field of ESPNOW data in this example. */
 typedef struct {
     uint8_t type;                         //Broadcast or unicast ESPNOW data.
@@ -79,5 +122,6 @@ typedef struct {
     uint8_t dest_mac[ESP_NOW_ETH_ALEN];   //MAC address of destination device.
 } example_espnow_send_param_t;
 
+void first_time(void);
 
 #endif
