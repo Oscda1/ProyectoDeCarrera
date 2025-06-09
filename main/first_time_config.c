@@ -8,7 +8,10 @@
 #define WIFI_NO_OPTIONS "<div class=\"wifi-option\">No networks found</div>"
 #define ESPNOW_OPTIONS_START "<option value=\""
 #define ESPNOW_NO_OPTIONS "<option value=\"\" disabled>No networks found</option>"
-#define RESPONSE_SIZE 4096
+#define RESPONSE_SIZE 6144
+#define MIN(a,b) ((a) < (b) ? (a) : (b))
+
+#define PIN 12345
 
 TYPE_DYNAMIC_LIST *dynamic_list = NULL; // Pointer to the dynamic list of networks
 TYPE_DYNAMIC_LIST *dynamic_list_tail = NULL; // Pointer to the tail of the dynamic list
@@ -252,9 +255,67 @@ void FLASH_DATA_INIT() {
     return;
 }
 
+void save_data(httpd_req_t *req) {
+    TYPE_FLASH_INFO flash_data = {0};
+    char buf[100];
+    char device_type[10];
+    int ret, remaining = req->content_len;
+    if (remaining > sizeof(buf)) {
+        ESP_LOGE("HTTPD", "Request too large");
+        httpd_resp_send_err(req, HTTPD_431_REQ_HDR_FIELDS_TOO_LARGE, "Request Entity Too Large");
+        return;
+    }
+    // Read the request body
+    ret = httpd_req_recv(req, buf, MIN(remaining, sizeof(buf)));
+    if (ret <= 0) {
+        ESP_LOGE("HTTPD", "Failed to read request body: %d", ret);
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Bad Request");
+        return;
+    }
+    buf[ret] = '\0'; // Null-terminate the string
+
+   ESP_LOGI("HTTPD", "Received data: %s", buf);
+   sscanf(buf,"RAV:%63[^:]:%9[^:]:%31[^:]:%63[^:]:%31[^\n]",flash_data.alias, device_type, flash_data.wifi_details.ssid, flash_data.wifi_details.password, flash_data.nomRed);
+   if(strcmp(device_type, "Baliza")==0){
+    flash_data.device_type = DISP_BALIZA;
+    strcpy(flash_data.wifi_details.ssid, "\0");
+    strcpy(flash_data.wifi_details.password, "\0");
+   }else{
+    if(strcmp(flash_data.wifi_details.ssid, "N/A") == 0){
+        strcpy(flash_data.wifi_details.ssid, "\0");
+        strcpy(flash_data.wifi_details.password, "\0");
+        flash_data.device_type = DISP_USUARIO;
+    }else{
+        flash_data.device_type = DISP_COLABORADOR;
+    }
+   }
+    flash_data.alr_init= true;
+    flash_data.pin = PIN;
+    nvs_handle_t nvs_handle;
+    esp_err_t err = nvs_open("data", NVS_READWRITE, &nvs_handle);
+    nvs_set_blob(nvs_handle, "data", &flash_data, sizeof(flash_data));
+    nvs_commit(nvs_handle);
+    nvs_close(nvs_handle);
+    ESP_LOGI("HTTPD", "Data saved successfully: Alias: %s, SSID: %s, Password: %s, Network Name: %s",
+             flash_data.alias, flash_data.wifi_details.ssid, flash_data.wifi_details.password, flash_data.nomRed);
+    esp_restart();
+   return;
+}
+
 esp_err_t html_get_handler(httpd_req_t *req) {
     // Initialize the web page
-    init_web_page(req);
+    if(req->method != HTTP_GET && req->method != HTTP_POST) {
+        ESP_LOGE("HTTPD", "Unsupported method: %d", req->method);
+        httpd_resp_send_err(req, HTTPD_405_METHOD_NOT_ALLOWED, "Method Not Allowed");
+        return ESP_FAIL;
+    }
+    if(req->method == HTTP_GET){
+        ESP_LOGI("HTTPD", "GET request received");
+        init_web_page(req);
+    } else{
+        ESP_LOGI("HTTPD", "POST request received");
+        save_data(req);
+    }
     return ESP_OK;
 }
 
@@ -329,6 +390,15 @@ void AP_WIFI_INIT(){
         };
         httpd_register_uri_handler(server, &uri_get);
 
+        httpd_uri_t index_uri = {
+            .uri = "/submit",
+            .method = HTTP_POST,
+            .handler = html_get_handler, // Reuse the same handler for POST requests
+            .user_ctx = NULL
+        };
+        httpd_register_uri_handler(server, &index_uri);
+            
+
         httpd_uri_t css_uri = {
             .uri = "/style.css",
             .method = HTTP_GET,
@@ -380,6 +450,7 @@ void first_time(void){
     }
     ESP_ERROR_CHECK(ret);
 
+    xTaskCreate(gpiosAnimationFirstStart, "gpiosAnimationFirstStart", 2048, NULL, 5, NULL);
     init_spiffs();
 
     FLASH_DATA_INIT();

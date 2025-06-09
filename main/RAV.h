@@ -7,6 +7,8 @@
 #include "esp_log.h"
 #include "esp_now.h"
 #include "nvs_flash.h"
+#include "driver/gpio.h"
+#include "freertos/task.h"
 
 /* ESPNOW can work in both station and softap mode. It is configured in menuconfig. */
 #if CONFIG_ESPNOW_WIFI_MODE_STATION
@@ -87,6 +89,7 @@ typedef struct{
     TYPE_DEVICE device_type;            //Type of device (e.g., collaborator, user, beacon).
     PIN_TYPE pin;                       //Pin number for the device.
     char nomRed[32];                    //Network name.
+    char alias[64];                     //Alias for the device.
 }TYPE_FLASH_INFO;
 
 typedef struct{
@@ -122,6 +125,16 @@ typedef struct {
     uint8_t dest_mac[ESP_NOW_ETH_ALEN];   //MAC address of destination device.
 } example_espnow_send_param_t;
 
+
+// Function prototypes
+
+// first_time_config.c
 void first_time(void);
+
+// gpios.c
+void gpiosInit();
+void gpiosAnimationFirstStart();
+void gpiosWifiEnabled();
+void gpiosWifiDisabled();
 
 #endif

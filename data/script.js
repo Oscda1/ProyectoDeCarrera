@@ -220,7 +220,26 @@
         }
 
         function submitData() {
-            alert('Datos enviados!');
+            // Metodo post con los datos
+            const alias = document.getElementById('alias').value;
+            const wifiNetwork = selectedWifiNetwork || document.getElementById('manualNetworkName').value;
+            const networkList = document.getElementById('networkList').value;
+            const newNetworkName = document.getElementById('newNetworkName').value;
+            // Enviar los datos con formato DeviceType:alias:wifiNetwork:wifiPassword:networkName
+            const data = "RAV:"+ alias + ':' +
+                deviceType + ':' +
+                (wifiNetwork || 'N/A') + ':' +
+                (document.getElementById('wifiPassword').value || 'N/A') + ':' +
+                (networkList || newNetworkName);
+
+            console.log('Datos enviados:', data);
+            fetch('/submit', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'plain/text'
+                },
+                body: data})
+            document.getElementById('btnSubmitData').disabled = true; 
         }
 
         function toggleCreateNetwork() {
