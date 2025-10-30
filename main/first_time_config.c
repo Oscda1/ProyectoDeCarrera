@@ -8,13 +8,15 @@
 #define WIFI_NO_OPTIONS "<div class=\"wifi-option\">No networks found</div>"
 #define ESPNOW_OPTIONS_START "<option value=\""
 #define ESPNOW_NO_OPTIONS "<option value=\"\" disabled>No networks found</option>"
-#define RESPONSE_SIZE 6144
+#define RESPONSE_SIZE 8192
 #define MIN(a,b) ((a) < (b) ? (a) : (b))
-
-#define PIN 12345
 
 TYPE_DYNAMIC_LIST *dynamic_list = NULL; // Pointer to the dynamic list of networks
 TYPE_DYNAMIC_LIST *dynamic_list_tail = NULL; // Pointer to the tail of the dynamic list
+
+char wifi_option[256];
+char ssid[33];
+uint8_t scan_payload[32] = {0};
 
 void init_spiffs(){
     esp_vfs_spiffs_conf_t conf = {
@@ -56,12 +58,11 @@ char *getAPS(){
     uint16_t ap_count = 0;
     ESP_ERROR_CHECK(esp_wifi_scan_get_ap_num(&ap_count));
     ESP_LOGI("WiFi Scan", "Found %d networks", ap_count);
-    wifi_ap_record_t ap_records[ap_count];
+    wifi_ap_record_t *ap_records = malloc(ap_count * sizeof(wifi_ap_record_t));
     ESP_ERROR_CHECK(esp_wifi_scan_get_ap_records(&ap_count, ap_records));
     // Build the response string with available networks
     response[0] = '\0'; // Initialize the response string
     for (int i = 0; i < ap_count; i++) {
-        char ssid[33];
         snprintf(ssid, sizeof(ssid), "%s", ap_records[i].ssid);
         if(strlen(ssid) == 0){
             ESP_LOGW("WiFi Scan", "SSID is empty for network %d, skipping...", i);
@@ -69,10 +70,9 @@ char *getAPS(){
         }
         ESP_LOGI("WiFi Scan", "Network %d: SSID: %s, RSSI: %d", i + 1, ssid, ap_records[i].rssi);
         // Append the WiFi option HTML to the response
-        char wifi_option[256];
+        
         snprintf(wifi_option, sizeof(wifi_option), WIFI_OPTIONS_START "%s')\">%s</div>", ssid, ssid);
         strncat(response, wifi_option, RESPONSE_SIZE - strlen(response) - 1);
-        ESP_LOGI("WiFi Scan", "Response: %s", response);
     }
     if (ap_count == 0) {
         // If no networks found, add a message
@@ -85,6 +85,7 @@ char *getAPS(){
 
 char *getNetworks() {
     // Initialize the response string
+    ESP_LOGI("Dynamic List", "Building response for available networks in dynamic list");
     char *response = (char *)malloc(RESPONSE_SIZE);
     memset(response, 0, RESPONSE_SIZE); // Initialize the response string to avoid garbage values
     response[0] = '\0'; // Initialize the response string
@@ -92,10 +93,15 @@ char *getNetworks() {
     while (current_node != NULL) {
         // Append the network information to the response
         char network_info[256];
-        snprintf(network_info, sizeof(network_info), ESPNOW_OPTIONS_START "%s : %s\">%s : %s</option>", 
+        snprintf(network_info, sizeof(network_info), ESPNOW_OPTIONS_START "%s:%s:%02x.%02x.%02x.%02x.%02x.%02x\">%s : %s </option>", 
                  current_node->network_info.red, current_node->network_info.alias,
-                 current_node->network_info.red, current_node->network_info.alias);
+                    current_node->network_info.mac[0], current_node->network_info.mac[1],
+                    current_node->network_info.mac[2], current_node->network_info.mac[3],
+                    current_node->network_info.mac[4], current_node->network_info.mac[5],
+                 current_node->network_info.red, current_node->network_info.alias
+                 );
         strncat(response, network_info, RESPONSE_SIZE - strlen(response) - 1);
+        current_node = current_node->next_node; 
     }
     if (dynamic_list == NULL) {
         // If no networks found, add a message
@@ -206,7 +212,7 @@ static esp_err_t css_get_handler(httpd_req_t *req) {
     return ESP_OK;
 }
 
-void push_data_to_dynamic_list(char* red, char* alias) {
+void push_data_to_dynamic_list(char* red, char* alias, uint8_t *mac) {
     // Allocate memory for a new node
     TYPE_DYNAMIC_LIST *new_node = (TYPE_DYNAMIC_LIST *)malloc(sizeof(TYPE_DYNAMIC_LIST));
     if (new_node == NULL) {
@@ -216,6 +222,7 @@ void push_data_to_dynamic_list(char* red, char* alias) {
     // Initialize the new node
     strncpy(new_node->network_info.red, red, sizeof(new_node->network_info.red) - 1);
     strncpy(new_node->network_info.alias, alias, sizeof(new_node->network_info.alias) - 1);
+    memcpy(new_node->network_info.mac, mac, ESP_NOW_ETH_ALEN);
     new_node->next_node = NULL;
 
     // If the list is empty, set the new node as the head
@@ -257,9 +264,11 @@ void FLASH_DATA_INIT() {
 
 void save_data(httpd_req_t *req) {
     TYPE_FLASH_INFO flash_data = {0};
+    TYPE_FLASH_NODES flash_nodes={0};
     char buf[100];
     char device_type[10];
     int ret, remaining = req->content_len;
+    uint8_t first_node=0;
     if (remaining > sizeof(buf)) {
         ESP_LOGE("HTTPD", "Request too large");
         httpd_resp_send_err(req, HTTPD_431_REQ_HDR_FIELDS_TOO_LARGE, "Request Entity Too Large");
@@ -275,31 +284,93 @@ void save_data(httpd_req_t *req) {
     buf[ret] = '\0'; // Null-terminate the string
 
    ESP_LOGI("HTTPD", "Received data: %s", buf);
-   sscanf(buf,"RAV:%63[^:]:%9[^:]:%31[^:]:%63[^:]:%31[^\n]",flash_data.alias, device_type, flash_data.wifi_details.ssid, flash_data.wifi_details.password, flash_data.nomRed);
-   if(strcmp(device_type, "Baliza")==0){
-    flash_data.device_type = DISP_BALIZA;
-    strcpy(flash_data.wifi_details.ssid, "\0");
-    strcpy(flash_data.wifi_details.password, "\0");
-   }else{
-    if(strcmp(flash_data.wifi_details.ssid, "N/A") == 0){
+    sscanf(buf, "RAV:%63[^:]:%9[^:]:%31[^:]:%63[^:]:%31[^:]:%*[^:]:%hhx.%hhx.%hhx.%hhx.%hhx.%hhx", 
+         flash_data.alias, device_type, flash_data.wifi_details.ssid, flash_data.wifi_details.password, flash_data.nomRed,
+         &flash_nodes.nodes[0].mac[0], &flash_nodes.nodes[0].mac[1], &flash_nodes.nodes[0].mac[2],
+         &flash_nodes.nodes[0].mac[3], &flash_nodes.nodes[0].mac[4], &flash_nodes.nodes[0].mac[5]);
+
+    ESP_LOGI("HTTPD", "Parsed data: Alias: %s, Device Type: %s, SSID: %s, Password: %s, Network Name: %s, MAC: %02x:%02x:%02x:%02x:%02x:%02x",
+                flash_data.alias, device_type, flash_data.wifi_details.ssid, flash_data.wifi_details.password, flash_data.nomRed,
+                flash_nodes.nodes[0].mac[0], flash_nodes.nodes[0].mac[1],
+                flash_nodes.nodes[0].mac[2], flash_nodes.nodes[0].mac[3],
+                flash_nodes.nodes[0].mac[4], flash_nodes.nodes[0].mac[5]);
+
+    if(flash_nodes.nodes[0].mac[0] == 0 && flash_nodes.nodes[0].mac[1] == 0 &&
+    flash_nodes.nodes[0].mac[2] == 0 && flash_nodes.nodes[0].mac[3] == 0 &&
+    flash_nodes.nodes[0].mac[4] == 0 && flash_nodes.nodes[0].mac[5] == 0) {
+        ESP_LOGI("FLASH_NODES","Se acaba de crear la red, primer nodo de la red");
+        first_node = 1; // Indicate that this is the first node in the network
+    }
+
+    if (strcmp(device_type, "Baliza") == 0) {
+        flash_data.device_type = DISP_BALIZA;
         strcpy(flash_data.wifi_details.ssid, "\0");
         strcpy(flash_data.wifi_details.password, "\0");
-        flash_data.device_type = DISP_USUARIO;
-    }else{
-        flash_data.device_type = DISP_COLABORADOR;
+    } else {
+        if (strcmp(flash_data.wifi_details.ssid, "N/A") == 0) {
+            strcpy(flash_data.wifi_details.ssid, "\0");
+            strcpy(flash_data.wifi_details.password, "\0");
+            flash_data.device_type = DISP_USUARIO;
+        } else {
+            flash_data.device_type = DISP_COLABORADOR;
+        }
     }
-   }
-    flash_data.alr_init= true;
+
+    flash_data.alr_init = true;
     flash_data.pin = PIN;
+
     nvs_handle_t nvs_handle;
     esp_err_t err = nvs_open("data", NVS_READWRITE, &nvs_handle);
-    nvs_set_blob(nvs_handle, "data", &flash_data, sizeof(flash_data));
+    size_t size = sizeof(flash_data);
+    nvs_erase_key(nvs_handle, "data"); 
+    err = nvs_set_blob(nvs_handle, "data", &flash_data, size);
+    if(err!= ESP_OK) {
+        ESP_LOGE("NVS", "Failed to set data in NVS: %s", esp_err_to_name(err));
+        nvs_close(nvs_handle);
+        return;
+    }
     nvs_commit(nvs_handle);
     nvs_close(nvs_handle);
-    ESP_LOGI("HTTPD", "Data saved successfully: Alias: %s, SSID: %s, Password: %s, Network Name: %s",
-             flash_data.alias, flash_data.wifi_details.ssid, flash_data.wifi_details.password, flash_data.nomRed);
+    nvs_open("data", NVS_READWRITE, &nvs_handle);
+    nvs_get_blob(nvs_handle, "data", &flash_data, &size);
+    nvs_close(nvs_handle);
+    ESP_LOGI("NVS", "Data saved successfully: Alias: %s, SSID: %s, Password: %s, Network Name: %s, Device Type: %d : %s, Pin: %d",
+                flash_data.alias,
+                flash_data.wifi_details.ssid,
+                flash_data.wifi_details.password,
+                flash_data.nomRed,
+                flash_data.device_type,
+                flash_data.device_type == DISP_COLABORADOR ? "Colaborador" :
+                flash_data.device_type == DISP_USUARIO ? "Usuario" : "Baliza",
+                flash_data.pin);
+
+    if(first_node==0){ 
+        flash_nodes.active_nodes = 1;
+        err = nvs_open("node_info", NVS_READWRITE, &nvs_handle);
+        if (err != ESP_OK && err != ESP_ERR_NVS_NOT_FOUND) {
+            ESP_LOGE("NVS", "Failed to open NVS handle for node_info: %s", esp_err_to_name(err));
+            return;
+        }else{
+            nvs_erase_key(nvs_handle, "node_info"); 
+            nvs_set_blob(nvs_handle, "node_info", &flash_nodes, sizeof(flash_nodes));
+            nvs_commit(nvs_handle);
+            nvs_close(nvs_handle);
+            ESP_LOGI("NVS", "Node info saved successfully");
+        }
+        sprintf(buf, "RAV:%d:%d:%s", ESP_NOW_SEND, SEND_PAIR,flash_data.nomRed);
+        esp_now_register_peer(flash_nodes.nodes[0].mac); 
+        esp_now_send_data(flash_nodes.nodes[0].mac, (uint8_t *)buf, strlen(buf));
+    }
+
+    ESP_LOGI("HTTPD", "Data saved successfully: Alias: %s, SSID: %s, Password: %s, Network Name: %s, MAC: %02x:%02x:%02x:%02x:%02x:%02x",
+                flash_data.alias, flash_data.wifi_details.ssid, flash_data.wifi_details.password, flash_data.nomRed,
+                flash_nodes.nodes[0].mac[0], flash_nodes.nodes[0].mac[1],
+                flash_nodes.nodes[0].mac[2], flash_nodes.nodes[0].mac[3],
+                flash_nodes.nodes[0].mac[4], flash_nodes.nodes[0].mac[5]);
+    memset(buf, 0, sizeof(buf));
+
     esp_restart();
-   return;
+    return;
 }
 
 esp_err_t html_get_handler(httpd_req_t *req) {
@@ -319,64 +390,10 @@ esp_err_t html_get_handler(httpd_req_t *req) {
     return ESP_OK;
 }
 
-void esp_now_send_cb(const uint8_t *mac_addr, esp_now_send_status_t status) {
-    if (status == ESP_NOW_SEND_SUCCESS) {
-        ESP_LOGI("ESP-NOW", "Send success to MAC: %02x:%02x:%02x:%02x:%02x:%02x",
-                 mac_addr[0], mac_addr[1], mac_addr[2],
-                 mac_addr[3], mac_addr[4], mac_addr[5]);
-    } else {
-        ESP_LOGE("ESP-NOW", "Send failure to MAC: %02x:%02x:%02x:%02x:%02x:%02x, status: %d",
-                 mac_addr[0], mac_addr[1], mac_addr[2],
-                 mac_addr[3], mac_addr[4], mac_addr[5], status);
-    }
-}
-
-void esp_now_receive_cb(const uint8_t *mac_addr, const uint8_t *data, int data_len) {
-    // Handle received data
-    ESP_LOGI("ESP-NOW", "Received data from MAC: %02x:%02x:%02x:%02x:%02x:%02x",
-             mac_addr[0], mac_addr[1], mac_addr[2],
-             mac_addr[3], mac_addr[4], mac_addr[5]);
-    ESP_LOGI("ESP-NOW", "Data length: %d", data_len);
-    ESP_LOG_BUFFER_HEX("ESP-NOW", data, data_len);
-    if(strstr((const char *)data, "RAV") != NULL) {
-        ESP_LOGI("ESP-NOW", "Payload: %s", data);
-        TYPE_PAYLOAD payload;
-        memset(&payload, 0, sizeof(payload));
-        sscanf((const char *)data, "RAV:%c[^:]%32s[^:]%64s", &payload.command, payload.red, payload.info);
-        if(payload.command == 'P'){
-            ESP_LOGI("ESP-NOW", "Command of pairing received: %c", payload.command);
-            // Add the network to the dynamic list
-            push_data_to_dynamic_list(payload.red, payload.info);
-        }
-    }
-}
-
 void AP_WIFI_INIT(){
-    ESP_LOGI("AP_WIFI_INIT", "Initializing WiFi in AP mode");
-    ESP_ERROR_CHECK(esp_netif_init());
-    ESP_ERROR_CHECK(esp_event_loop_create_default());
-    esp_netif_create_default_wifi_ap();
-    // Initialize the WiFi in AP mode
-    wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
-    ESP_ERROR_CHECK(esp_wifi_init(&cfg));
-    
-    // Set up the WiFi configuration
-    wifi_config_t wifi_config = {
-        .ap = {
-            .ssid = "RAV",
-            .ssid_len = strlen("RAV"),
-            .authmode = WIFI_AUTH_OPEN,
-            .channel = 5,
-            .max_connection = 1,
-            .beacon_interval = 100,
-        },
-    };
-    // Set the WiFi configuration
-    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_APSTA));
-    ESP_ERROR_CHECK(esp_wifi_set_config(ESP_IF_WIFI_AP, &wifi_config));
-    // Start the WiFi
-    ESP_ERROR_CHECK(esp_wifi_start());
-    ESP_LOGI("AP_WIFI_INIT", "WiFi AP mode initialized with SSID: %s", wifi_config.ap.ssid);
+    wifi_init(1); // Initialize WiFi in AP mode
+    xTaskCreate(esp_now_task, "esp_now_task", ESP_NOW_STACK_SIZE, NULL, 5, NULL);
+
     httpd_handle_t server = NULL;
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     if(httpd_start(&server, &config) == ESP_OK) {
@@ -417,32 +434,11 @@ void AP_WIFI_INIT(){
     } else {
         ESP_LOGE("AP_WIFI_INIT", "Failed to start HTTP server");
     }
-
-    // Initialize ESP-NOW
-    ESP_LOGI("AP_WIFI_INIT", "Initializing ESP-NOW");
-    ESP_ERROR_CHECK(esp_now_init());
-    ESP_LOGI("AP_WIFI_INIT", "ESP-NOW initialized successfully");
-    // Register the send and receive callbacks
-    ESP_ERROR_CHECK(esp_now_register_send_cb(esp_now_send_cb));
-    ESP_ERROR_CHECK(esp_now_register_recv_cb(esp_now_receive_cb));
-    ESP_LOGI("AP_WIFI_INIT", "Send and receive callbacks registered successfully");
-    // Set the broadcast peer
-    uint8_t broadcast_mac[ESP_NOW_ETH_ALEN] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
-    esp_now_peer_info_t peer_info = {
-        .channel = 5, // Use the same channel as the AP
-        .ifidx = ESP_IF_WIFI_STA,
-        .encrypt = false,
-    };
-    memcpy(peer_info.peer_addr, broadcast_mac, ESP_NOW_ETH_ALEN);
-    esp_err_t ret = esp_now_add_peer(&peer_info);
-    if (ret != ESP_OK) {
-        ESP_LOGE("AP_WIFI_INIT", "Failed to add peer: %s", esp_err_to_name(ret));
-    } else {
-        ESP_LOGI("AP_WIFI_INIT", "Broadcast peer added successfully");
-    }
 }
 
 void first_time(void){
+    uint8_t broadcast_mac[ESP_NOW_ETH_ALEN] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+    
     esp_err_t ret = nvs_flash_init();
     if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
         ESP_ERROR_CHECK( nvs_flash_erase() );
@@ -455,4 +451,8 @@ void first_time(void){
 
     FLASH_DATA_INIT();
     AP_WIFI_INIT();
+    esp_now_register_peer(broadcast_mac);
+    sprintf((char *)scan_payload, "RAV:%"PRIu8":%"PRIu8, ESP_NOW_SEND, SEND_SCAN);
+    esp_now_send_data(broadcast_mac, scan_payload, strlen((char *)scan_payload));
+    ESP_LOGI("FIRST_TIME", "First time configuration completed, waiting for data...");
 }

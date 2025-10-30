@@ -5,10 +5,11 @@
     "idf.openOcdConfigs": [
         "board/esp32-wrover-kit-3.3v.cfg"
     ],
-    "idf.portWin": "COM3",
+    "idf.portWin": "COM7",
     "idf.toolsPathWin": "c:\\ESPIDF-TOOLS",
     "idf.flashType": "UART",
     "files.associations": {
-        "espnow_example.h": "c"
+        "espnow_example.h": "c",
+        "task.h": "c"
     }
 }

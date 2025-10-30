@@ -2,13 +2,16 @@
 #define RAV_H
 
 #include <stdio.h>
-#include <string.h>
+#include "string.h"
 #include "esp_wifi.h"
 #include "esp_log.h"
 #include "esp_now.h"
 #include "nvs_flash.h"
 #include "driver/gpio.h"
+#include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "esp_netif.h"
+#include "esp_mac.h"
 
 /* ESPNOW can work in both station and softap mode. It is configured in menuconfig. */
 #if CONFIG_ESPNOW_WIFI_MODE_STATION
@@ -22,6 +25,23 @@
 #define ESPNOW_QUEUE_SIZE           6
 
 #define IS_BROADCAST_ADDR(addr) (memcmp(addr, s_example_broadcast_mac, ESP_NOW_ETH_ALEN) == 0)
+
+// #define ESP_1
+#define ESP_2
+// #define ESP_3
+
+#if defined(ESP_1)
+#define PIN 12345
+#elif defined(ESP_2)
+#define PIN 00005
+#else
+#define PIN 12321
+#endif
+
+#define ESP_NOW_STACK_SIZE 4096
+#define BUTTON_LOGIC_STACK_SIZE 4096
+
+#define ESP_NOW_CHANNEL 11
 
 typedef enum {
     EXAMPLE_ESPNOW_SEND_CB,
@@ -51,7 +71,7 @@ typedef struct {
 } example_espnow_event_t;
 
 enum {
-    EXAMPLE_ESPNOW_DATA_BROADCAST,
+    EXAMPLE_ESPNOW_DATA_BROADCAST=0,
     EXAMPLE_ESPNOW_DATA_UNICAST,
     EXAMPLE_ESPNOW_DATA_MAX,
 };
@@ -60,6 +80,32 @@ enum{
     DISP_COLABORADOR=0,
     DISP_USUARIO,
     DISP_BALIZA
+};
+
+enum{
+    STATE_ACTIVO=0,                   // Significa que el dispositivo está en alcance y emparejado
+    STATE_INACTIVO,                   // Significa que no se puede establecer comunicación con el dispositivo
+    STATE_DESVINCULADO                // Significa que el dispositivo ha sido olvidado y no se puede volver a emparejar
+};
+
+enum{
+    SEND_SCAN=0,
+    SEND_PAIR,
+    SEND_UNPAIR,
+    SEND_ALERT,
+    SEND_MESSAGE_TO,
+};
+
+enum{
+    RESPONSE_ACK=0,
+    RESPONSE_NACK,
+    RESPONSE_DATA,
+    RESPONSE_MAX_DEVICES
+};
+
+enum{
+    ESP_NOW_SEND=0,
+    ESP_NOW_RESPONSE,
 };
 
 typedef struct{
@@ -73,15 +119,30 @@ typedef struct{
 }TYPE_ESP_NOW_DEVICE;
 
 typedef struct{
-    char command;                     //Command to be executed.
-    char red[32];                     //Network name.
-    char info[64];                    //Additional information.
+    uint8_t command_type;               //Type of command to be executed. Ej - ESP_NOW_SEND or ESP_NOW_RESPONSE.
+    uint8_t command;                    //Command to be executed.
+    char red[32];                       //Network name.
+    char info[64];                      //Additional information.
+    uint8_t mac[ESP_NOW_ETH_ALEN];       //MAC address of the peer device.
 }TYPE_PAYLOAD;
 
 typedef uint16_t PIN_TYPE;
 
 typedef uint8_t TYPE_DEVICES_NUM;
 typedef uint8_t TYPE_DEVICE;
+
+extern EventGroupHandle_t wifi_event_group;
+extern uint8_t WIFI_CONNECTED_BIT, WIFI_NOT_CONNECTED_BIT, ESP_NOW_ALERT_READY_BIT, ESP_NOW_ALERT_IN_PROGRESS;
+
+typedef struct{
+    uint8_t mac[ESP_NOW_ETH_ALEN];     //MAC address of the node.
+    uint8_t state;                     //State of the node (active, inactive, forgotten).
+}TYPE_NODE_INFO;
+
+typedef struct{
+    uint8_t active_nodes; //Number of active nodes.
+    TYPE_NODE_INFO nodes[20]; // Array of nodes, max 20 nodes.
+}TYPE_FLASH_NODES;
 
 typedef struct{
     bool alr_init;                      //Indicate that if it is the first time configuration or not.
@@ -95,12 +156,13 @@ typedef struct{
 typedef struct{
     char red[32];                     //Network name.
     char alias[64];                   //Alias for the device on the network.
+    uint8_t mac[ESP_NOW_ETH_ALEN];   //MAC address of the device on the network.
 }TYPE_NETWORK_INFO;
 
-typedef struct{
+typedef struct TYPE_DYNAMIC_LIST {
     TYPE_NETWORK_INFO network_info;       //Network information.
-    TYPE_NETWORK_INFO* next_node;         //Pointer to the next node in the linked list.
-}TYPE_DYNAMIC_LIST;
+    struct TYPE_DYNAMIC_LIST* next_node;  //Pointer to the next node in the linked list.
+} TYPE_DYNAMIC_LIST;
 
 /* User defined field of ESPNOW data in this example. */
 typedef struct {
@@ -130,11 +192,26 @@ typedef struct {
 
 // first_time_config.c
 void first_time(void);
+void push_data_to_dynamic_list(char* red, char* alias, uint8_t* mac);
 
 // gpios.c
 void gpiosInit();
 void gpiosAnimationFirstStart();
 void gpiosWifiEnabled();
 void gpiosWifiDisabled();
+void gpiosAnimationAlert(void *Arguments);
+
+//espnow.c
+void esp_now_task(void *pvArgs);
+void esp_now_register_peer(const uint8_t *peer_addr);
+void esp_now_send_data(const uint8_t *peer_addr, const uint8_t *data, int data_len);
+void esp_now_send_data_to_all_peers(const uint8_t *data, int data_len);
+void esp_now_init_peers(void);
+
+//main
+void wifi_init(uint8_t mode);
+
+//sock
+void task_sock(void *Arguments);
 
 #endif

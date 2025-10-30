@@ -230,7 +230,7 @@
                 deviceType + ':' +
                 (wifiNetwork || 'N/A') + ':' +
                 (document.getElementById('wifiPassword').value || 'N/A') + ':' +
-                (networkList || newNetworkName);
+                (networkList || newNetworkName + ':N/A' + '00.00.00.00');
 
             console.log('Datos enviados:', data);
             fetch('/submit', {

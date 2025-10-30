@@ -1,5 +1,4 @@
 #include "RAV.h"
-#include "freertos/event_groups.h"
 
 volatile uint8_t gpio_state = 0;
 volatile TickType_t curTime=0;
@@ -8,9 +7,15 @@ volatile TickType_t curTime=0;
     TickType_t press_start_time = 0; // Tiempo en que el botón fue presionado
     TickType_t press_duration = 0;   // Duración de la presión del botón
     TYPE_FLASH_INFO gpio_flash_data = {0}; // Estructura para almacenar los datos de NVS
+    char buffer_gpio[105] = {0}; // Buffer para almacenar los datos de ESPNOW
 
 void buttonLogic(void *arg) {
-
+    nvs_handle_t nvs_handle;
+    size_t size=sizeof(gpio_flash_data);
+                    nvs_open("data", NVS_READWRITE, &nvs_handle);
+                    nvs_get_blob(nvs_handle, "data", &gpio_flash_data, &size);
+                    nvs_close(nvs_handle); // Cerrar el handle de NVS
+                    
     while (1) {
         if(press_start_time==0){
             if(gpio_get_level(GPIO_NUM_13) == 1){ // Si el botón está presionado
@@ -24,6 +29,17 @@ void buttonLogic(void *arg) {
                         ESP_LOGI("Button Logic", "Boton presionado durante %" PRIu32 " ms", press_duration * portTICK_PERIOD_MS);
                         press_duration = 0; // Reiniciar la duración de la presión
                         press_start_time = 0; // Reiniciar el tiempo de inicio
+                        if(xEventGroupGetBits(wifi_event_group) & ESP_NOW_ALERT_IN_PROGRESS){
+                            xEventGroupClearBits(wifi_event_group, ESP_NOW_ALERT_IN_PROGRESS); // Limpiar el bit de alerta en progreso
+                        }else{
+                            if(xEventGroupGetBits(wifi_event_group) & ESP_NOW_ALERT_READY_BIT){
+                                sprintf(buffer_gpio, "RAV:%d:%d:%s", ESP_NOW_SEND, SEND_ALERT,gpio_flash_data.nomRed);
+                                ESP_LOGI("Button Logic", "Boton presionado brevemente, enviando: %s", buffer_gpio);
+                                xEventGroupSetBits(wifi_event_group, ESP_NOW_ALERT_IN_PROGRESS); // Establecer el bit de alerta en progreso
+                                esp_now_send_data_to_all_peers((uint8_t *)buffer_gpio, strlen(buffer_gpio)); // Enviar alerta a todos los nodos
+                                xTaskCreate(gpiosAnimationAlert, "gpiosAnimationAlert", 2048, NULL, 5, NULL); // Iniciar la animación de alertas
+                            }
+                        }
                     }else{
                         ESP_LOGI("Button Logic", "Boton presionado brevemente, no se considera una acción");
                         press_duration = 0; // Reiniciar la duración de la presión
@@ -46,12 +62,15 @@ void buttonLogic(void *arg) {
                     ESP_LOGI("Button Logic", "Boton en presion larga durante %" PRIu32 " ms", press_duration * portTICK_PERIOD_MS);
                     press_duration = 0; // Reiniciar la duración de la presión
                     longPressed = 1; // Indicar que se ha detectado una presión larga
-
-                    nvs_handle_t nvs_handle;
-                    nvs_open("data", NVS_READWRITE, &nvs_handle);
-                    nvs_get_blob(nvs_handle, "data", &gpio_flash_data, NULL);
-                    gpio_flash_data.alr_init = false; // Indicar que no está inicializado
-                    nvs_set_blob(nvs_handle, "data", &gpio_flash_data, sizeof(gpio_flash_data));
+                    nvs_open("node_info", NVS_READWRITE, &nvs_handle);
+                    TYPE_FLASH_NODES flash_nodes = {0};
+                    size_t size = sizeof(flash_nodes);
+                    nvs_get_blob(nvs_handle, "node_info", &flash_nodes, &size); // Obtener los nodos reiniciados
+                    for(uint8_t x = 0; x < flash_nodes.active_nodes; x++) {
+                        sprintf(buffer_gpio, "RAV:%d:%d", ESP_NOW_SEND, SEND_UNPAIR);
+                        esp_now_send_data(flash_nodes.nodes[x].mac, (uint8_t *)buffer_gpio, strlen(buffer_gpio));
+                    }
+                    memset(&flash_nodes, 0, sizeof(flash_nodes)); // Reiniciar los nodos
                     nvs_commit(nvs_handle); // Guardar los cambios en NVS
                     nvs_close(nvs_handle); // Cerrar el handle de NVS
                     ESP_LOGI("Button Logic", "Datos de NVS reiniciados, reiniciando el dispositivo...");
@@ -91,6 +110,31 @@ void gpiosAnimationFirstStart(void *Arguments){
     }while(1);
 }
 
+void gpiosAnimationAlert(void *Arguments){
+    gpio_set_level(GPIO_NUM_21, 1); // Apagar LED verde
+    gpio_set_level(GPIO_NUM_22, 1); // Apagar LED azul
+    do{
+        if((xEventGroupGetBits(wifi_event_group) & ESP_NOW_ALERT_IN_PROGRESS)){
+            gpio_set_level(GPIO_NUM_23,0); // Encender LED rojo
+            vTaskDelay(300 / portTICK_PERIOD_MS);
+            gpio_set_level(GPIO_NUM_23,1); // Apagar LED rojo
+            vTaskDelay(300 / portTICK_PERIOD_MS);
+        }else{
+            gpio_set_level(GPIO_NUM_23,1); // Apagar LED rojo
+            if(xEventGroupGetBits(wifi_event_group) & WIFI_CONNECTED_BIT){
+                gpio_set_level(GPIO_NUM_21, 0); // Encender LED verde
+                gpio_set_level(GPIO_NUM_22, 1); // Apagar LED azul
+            }else{
+                gpio_set_level(GPIO_NUM_21, 1); // Apagar LED verde
+                gpio_set_level(GPIO_NUM_22, 0); // Encender LED azul
+            }
+            vTaskDelete(NULL); // Terminar la tarea si no hay alerta en progreso
+        }
+            
+        
+    }while(true);
+}
+
 void gpiosMessage(void *Arguments){
     ESP_LOGI("gpiosMessage", "Starting GPIO message animation");
     // Flashing red
@@ -120,5 +164,5 @@ void gpiosInit(){
     gpio_set_direction(GPIO_NUM_13, GPIO_MODE_INPUT);
     gpio_set_pull_mode(GPIO_NUM_13, GPIO_PULLDOWN_ONLY);
 
-    xTaskCreatePinnedToCore(buttonLogic, "buttonLogic", 2048, NULL, 5, NULL, 1);
+    xTaskCreatePinnedToCore(buttonLogic, "buttonLogic", BUTTON_LOGIC_STACK_SIZE, NULL, 5, NULL, 1);
 }
